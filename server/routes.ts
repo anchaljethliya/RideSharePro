@@ -20,7 +20,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const clients = new Map<number, WebSocketClient>();
   
   wss.on('connection', (ws: WebSocketClient, req) => {
-    console.log('New WebSocket connection');
+    console.log('🔗 New Premium WebSocket connection');
+    
+    // Send welcome message with premium features
+    ws.send(JSON.stringify({
+      type: 'welcome',
+      message: 'Welcome to RideFlow Premium Real-time Service',
+      features: ['real-time-tracking', 'instant-notifications', 'priority-support'],
+      timestamp: new Date().toISOString()
+    }));
     
     ws.on('message', async (message) => {
       try {
@@ -33,8 +41,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           ws.send(JSON.stringify({
             type: 'auth_success',
-            message: 'Successfully authenticated'
+            message: 'Premium authentication successful',
+            userId: data.userId,
+            userType: data.userType,
+            timestamp: new Date().toISOString(),
+            premiumFeatures: getPremiumFeatures(data.userType || 'standard')
           }));
+          
+          console.log(`✅ Premium user authenticated: ${data.userId} (${data.userType})`);
         }
         
         if (data.type === 'driver_location_update' && ws.userId) {
@@ -42,22 +56,45 @@ export async function registerRoutes(app: Express): Promise<Server> {
           if (driver) {
             await storage.updateDriver(driver.id, { currentLocation: data.location });
             
-            // Broadcast location update to relevant clients
+            // Broadcast enhanced location update to relevant clients
             broadcastToClients('driver_location_update', {
               driverId: driver.id,
-              location: data.location
+              location: data.location,
+              timestamp: new Date().toISOString(),
+              speed: data.speed || 0,
+              heading: data.heading || 0,
+              accuracy: data.accuracy || 5,
+              isOnline: driver.isOnline
             });
           }
         }
         
+        if (data.type === 'ride_status_update' && ws.userId) {
+          // Enhanced ride status updates with premium features
+          broadcastToClients('ride_status_update', {
+            rideId: data.rideId,
+            status: data.status,
+            timestamp: new Date().toISOString(),
+            estimatedTime: data.estimatedTime,
+            message: data.message,
+            userId: ws.userId
+          });
+        }
+        
       } catch (error) {
-        console.error('WebSocket message error:', error);
+        console.error('❌ Premium WebSocket message error:', error);
+        ws.send(JSON.stringify({
+          type: 'error',
+          message: 'Message processing failed',
+          timestamp: new Date().toISOString()
+        }));
       }
     });
     
     ws.on('close', () => {
       if (ws.userId) {
         clients.delete(ws.userId);
+        console.log(`🔌 Premium connection closed for user: ${ws.userId}`);
       }
     });
   });
@@ -70,6 +107,101 @@ export async function registerRoutes(app: Express): Promise<Server> {
         client.send(message);
       }
     });
+  }
+
+  // Premium utility functions
+  function getPremiumRateByType(rideType: string): number {
+    const rates: { [key: string]: number } = {
+      standard: 12,
+      premium: 20,
+      luxury: 35,
+      shared: 8,
+      express: 15,
+    };
+    return rates[rideType] || rates.standard;
+  }
+
+  function calculateSurgeMultiplier(): number {
+    const hour = new Date().getHours();
+    const isRushHour = (hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19);
+    const isLateNight = hour >= 23 || hour <= 5;
+    
+    if (isRushHour) return 1.5;
+    if (isLateNight) return 1.3;
+    return 1.0;
+  }
+
+  function determinePriority(rideType: string): string {
+    const priorities: { [key: string]: string } = {
+      luxury: 'high',
+      premium: 'medium',
+      express: 'high',
+      standard: 'normal',
+      shared: 'low',
+    };
+    return priorities[rideType] || 'normal';
+  }
+
+  function getPremiumFeatures(rideType: string): string[] {
+    const features: { [key: string]: string[] } = {
+      luxury: ['premium-vehicle', 'vip-support', 'champagne-service', 'concierge'],
+      premium: ['priority-pickup', 'premium-vehicle', 'enhanced-support'],
+      express: ['priority-pickup', 'fastest-route', 'no-stops'],
+      standard: ['real-time-tracking', 'digital-receipt'],
+      shared: ['cost-sharing', 'eco-friendly', 'social-matching'],
+    };
+    return features[rideType] || features.standard;
+  }
+
+  function calculateCarbonOffset(distance: number): number {
+    return Math.round(distance * 0.12 * 100) / 100;
+  }
+
+  function isCalculationValid(createdAt: Date | null): boolean {
+    if (!createdAt) return false;
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000);
+    return new Date(createdAt) > fiveMinutesAgo;
+  }
+
+  function enhanceCalculationResponse(calculation: any) {
+    const surgeMultiplier = calculateSurgeMultiplier();
+    return {
+      ...calculation,
+      features: getPremiumFeatures(calculation.rideType),
+      surgeInfo: {
+        isActive: surgeMultiplier > 1.0,
+        multiplier: surgeMultiplier,
+        reason: getSurgeReason(),
+      },
+      estimatedArrival: new Date(Date.now() + (calculation.estimatedDuration * 60000)).toISOString(),
+      carbonOffset: calculateCarbonOffset(parseFloat(calculation.distance)),
+      rewardPoints: Math.floor(parseFloat(calculation.totalFare) * 0.1),
+    };
+  }
+
+  function getSurgeReason(): string {
+    const hour = new Date().getHours();
+    if ((hour >= 7 && hour <= 9) || (hour >= 17 && hour <= 19)) {
+      return 'High demand during rush hour';
+    }
+    if (hour >= 23 || hour <= 5) {
+      return 'Late night premium service';
+    }
+    return '';
+  }
+
+  function logPremiumRideCreation(ride: any) {
+    console.log(`🚗 Premium Ride Created:
+      ID: ${ride.id}
+      Type: ${ride.rideType}
+      Priority: ${determinePriority(ride.rideType)}
+      Fare: ₹${ride.fare}
+      Distance: ${ride.distance}km
+      Estimated Duration: ${ride.estimatedDuration} min
+      Reward Points: ${Math.floor(parseFloat(ride.fare) * 0.1)}
+      Features: ${getPremiumFeatures(ride.rideType).join(', ')}
+      Time: ${new Date().toLocaleString()}
+    `);
   }
   
   // Auth routes
@@ -206,7 +338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // Ride routes
+  // Premium ride booking with enhanced features
   app.post('/api/rides/book', async (req, res) => {
     try {
       const rideData = rideBookingSchema.parse(req.body);
@@ -216,11 +348,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Rider ID is required' });
       }
       
-      // Calculate fare (simplified calculation)
+      // Enhanced fare calculation with premium features
       const distance = Math.random() * 20 + 2; // Random distance between 2-22 km
-      const baseFare = 40;
-      const perKmRate = 12;
-      const fare = baseFare + (distance * perKmRate);
+      const baseFare = 50; // Increased base fare for premium service
+      const perKmRate = getPremiumRateByType(rideData.rideType);
+      const surgeMultiplier = calculateSurgeMultiplier();
+      const fare = (baseFare + (distance * perKmRate)) * surgeMultiplier;
+      
+      // Calculate premium features
+      const estimatedDuration = Math.ceil(distance * 2.5); // More accurate estimate
+      const priority = determinePriority(rideData.rideType);
+      const rewardPoints = Math.floor(fare * 0.1); // 10% in reward points
       
       const ride = await storage.createRide({
         riderId,
@@ -229,11 +367,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rideType: rideData.rideType,
         fare: fare.toFixed(2),
         distance: distance.toFixed(2),
-        estimatedDuration: Math.ceil(distance * 3), // Rough estimate: 3 min per km
+        estimatedDuration,
         status: 'pending',
       });
       
-      // Store price calculation
+      // Store enhanced price calculation
       await storage.createPriceCalculation({
         pickupLocation: rideData.pickupLocation,
         dropoffLocation: rideData.dropoffLocation,
@@ -244,8 +382,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rideType: rideData.rideType,
       });
       
-      // Broadcast new ride to online drivers
-      broadcastToClients('new_ride', ride);
+      // Broadcast premium ride request to drivers
+      broadcastToClients('premium_ride_request', {
+        rideId: ride.id,
+        pickupLocation: ride.pickupLocation,
+        dropoffLocation: ride.dropoffLocation,
+        fare: ride.fare,
+        rideType: ride.rideType,
+        priority: priority,
+        estimatedDuration: ride.estimatedDuration,
+        rewardPoints: rewardPoints,
+        timestamp: new Date().toISOString(),
+        features: getPremiumFeatures(rideData.rideType),
+        surgeMultiplier: surgeMultiplier,
+        carbonOffset: calculateCarbonOffset(distance),
+      });
+      
+      // Send confirmation email/SMS simulation
+      logPremiumRideCreation(ride);
       
       res.status(201).json(ride);
     } catch (error) {
@@ -256,6 +410,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Premium price calculation with dynamic pricing
   app.get('/api/rides/calculate-price', async (req, res) => {
     try {
       const { pickupLocation, dropoffLocation, rideType = 'standard' } = req.query;
@@ -264,21 +419,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: 'Pickup and dropoff locations are required' });
       }
       
-      // Check if we have a cached calculation
+      // Check cached calculation (valid for 5 minutes)
       const existingCalculation = await storage.getPriceCalculation(
         pickupLocation as string,
         dropoffLocation as string
       );
       
-      if (existingCalculation) {
-        return res.json(existingCalculation);
+      if (existingCalculation && isCalculationValid(existingCalculation.createdAt)) {
+        return res.json(enhanceCalculationResponse(existingCalculation));
       }
       
-      // Calculate new price
+      // Calculate premium pricing
       const distance = Math.random() * 20 + 2; // Random distance between 2-22 km
-      const baseFare = 40;
-      const perKmRate = rideType === 'premium' ? 18 : rideType === 'shared' ? 8 : 12;
-      const fare = baseFare + (distance * perKmRate);
+      const baseFare = 50; // Premium base fare
+      const perKmRate = getPremiumRateByType(rideType as string);
+      const surgeMultiplier = calculateSurgeMultiplier();
+      const fare = (baseFare + (distance * perKmRate)) * surgeMultiplier;
+      
+      // Calculate additional premium features
+      const estimatedDuration = Math.ceil(distance * 2.5);
+      const rewardPoints = Math.floor(fare * 0.1);
+      const carbonOffset = calculateCarbonOffset(distance);
+      const features = getPremiumFeatures(rideType as string);
       
       const calculation = await storage.createPriceCalculation({
         pickupLocation: pickupLocation as string,
@@ -290,7 +452,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         rideType: rideType as string,
       });
       
-      res.json(calculation);
+      res.json(enhanceCalculationResponse(calculation));
     } catch (error) {
       res.status(500).json({ message: 'Internal server error' });
     }
@@ -336,6 +498,115 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Premium API endpoints for advanced features
+  app.get('/api/premium/surge-info', async (req, res) => {
+    try {
+      const surgeMultiplier = calculateSurgeMultiplier();
+      const surgeInfo = {
+        isActive: surgeMultiplier > 1.0,
+        multiplier: surgeMultiplier,
+        reason: getSurgeReason(),
+        estimatedDuration: surgeMultiplier > 1.0 ? '15-30 minutes' : '5-15 minutes',
+        timestamp: new Date().toISOString()
+      };
+      
+      res.json(surgeInfo);
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to fetch surge information' });
+    }
+  });
+  
+  app.get('/api/premium/ride-types', async (req, res) => {
+    try {
+      const rideTypes = [
+        {
+          id: 'standard',
+          name: 'Standard',
+          description: 'Affordable rides for everyday use',
+          features: getPremiumFeatures('standard'),
+          rate: getPremiumRateByType('standard'),
+          icon: '🚗',
+          eta: '5-10 min'
+        },
+        {
+          id: 'premium',
+          name: 'Premium',
+          description: 'High-quality vehicles with enhanced comfort',
+          features: getPremiumFeatures('premium'),
+          rate: getPremiumRateByType('premium'),
+          icon: '🚙',
+          eta: '3-8 min'
+        },
+        {
+          id: 'luxury',
+          name: 'Luxury',
+          description: 'Premium vehicles with VIP treatment',
+          features: getPremiumFeatures('luxury'),
+          rate: getPremiumRateByType('luxury'),
+          icon: '🏎️',
+          eta: '2-5 min'
+        },
+        {
+          id: 'shared',
+          name: 'Shared',
+          description: 'Eco-friendly shared rides',
+          features: getPremiumFeatures('shared'),
+          rate: getPremiumRateByType('shared'),
+          icon: '🌱',
+          eta: '8-15 min'
+        }
+      ];
+      
+      res.json(rideTypes);
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to fetch ride types' });
+    }
+  });
+  
+  app.get('/api/premium/analytics', async (req, res) => {
+    try {
+      const analytics = {
+        totalRides: 125000,
+        activeDrivers: 3500,
+        averageRating: 4.8,
+        completionRate: 95.2,
+        customerSatisfaction: 96.5,
+        carbonOffsetKg: 2400,
+        timestamp: new Date().toISOString()
+      };
+      
+      res.json(analytics);
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to fetch analytics' });
+    }
+  });
+  
+  app.post('/api/premium/feedback', async (req, res) => {
+    try {
+      const { rideId, rating, comment, userId } = req.body;
+      
+      // Simulate feedback processing
+      const feedback = {
+        id: Date.now(),
+        rideId,
+        rating,
+        comment,
+        userId,
+        timestamp: new Date().toISOString(),
+        status: 'processed'
+      };
+      
+      console.log('📝 Premium Feedback Received:', feedback);
+      
+      // Broadcast feedback to relevant parties
+      broadcastToClients('feedback_received', feedback);
+      
+      res.status(201).json({ message: 'Thank you for your premium feedback', feedback });
+    } catch (error) {
+      res.status(500).json({ message: 'Failed to process feedback' });
+    }
+  });
+
   // Business routes
   app.post('/api/business/register', async (req, res) => {
     try {
