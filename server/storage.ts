@@ -82,6 +82,9 @@ export class MemStorage implements IStorage {
       ...insertUser,
       id,
       createdAt: new Date(),
+      phone: insertUser.phone || null,
+      userType: insertUser.userType || "rider",
+      isActive: insertUser.isActive !== undefined ? insertUser.isActive : true,
     };
     this.users.set(id, user);
     return user;
@@ -164,6 +167,15 @@ export class MemStorage implements IStorage {
       createdAt: new Date(),
       startedAt: null,
       completedAt: null,
+      status: insertRide.status || "pending",
+      driverId: insertRide.driverId || null,
+      pickupCoords: insertRide.pickupCoords || null,
+      dropoffCoords: insertRide.dropoffCoords || null,
+      fare: insertRide.fare || null,
+      estimatedDuration: insertRide.estimatedDuration || null,
+      actualDuration: insertRide.actualDuration || null,
+      distance: insertRide.distance || null,
+      rideType: insertRide.rideType || "standard",
     };
     this.rides.set(id, ride);
     return ride;
@@ -199,6 +211,9 @@ export class MemStorage implements IStorage {
       totalRides: 0,
       monthlySpend: "0.00",
       createdAt: new Date(),
+      address: insertBusiness.address || null,
+      phone: insertBusiness.phone || null,
+      isActive: insertBusiness.isActive !== undefined ? insertBusiness.isActive : true,
     };
     this.businesses.set(id, business);
     return business;
@@ -220,6 +235,7 @@ export class MemStorage implements IStorage {
       ...insertCalculation,
       id,
       createdAt: new Date(),
+      rideType: insertCalculation.rideType || "standard",
     };
     this.priceCalculations.set(id, calculation);
     return calculation;
