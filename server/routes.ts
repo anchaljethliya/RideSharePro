@@ -1,3 +1,38 @@
+/*
+API Endpoints:
+
+# Auth
+POST   /api/auth/register         Register a new user
+POST   /api/auth/login            Login a user
+
+# Users
+GET    /api/users/:id             Get user by ID
+
+# Drivers
+POST   /api/drivers/register      Register a new driver
+GET    /api/drivers/:id           Get driver by ID
+GET    /api/drivers/:id/location  Get driver location
+
+# Rides
+POST   /api/rides                 Request a new ride
+POST   /api/rides/:id/assign      Assign a driver to a ride
+PATCH  /api/rides/:id/status      Update ride status
+GET    /api/rides/rider/:riderId  Get rides by rider
+GET    /api/rides/driver/:driverId Get rides by driver
+PATCH  /api/rides/:id             Update ride (generic)
+
+# Price Calculation
+GET    /api/rides/calculate-price Calculate ride price
+
+# Premium
+GET    /api/premium/surge-info    Get surge pricing info
+GET    /api/premium/ride-types    Get available ride types
+GET    /api/premium/analytics     Get analytics
+POST   /api/premium/feedback      Submit feedback
+
+# Business
+POST   /api/business/register     Register a business
+*/
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -165,15 +200,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   function enhanceCalculationResponse(calculation: any) {
     const surgeMultiplier = calculateSurgeMultiplier();
+    // Use calculation.estimatedDuration if present, else fallback to 2.5 * distance
+    let estimatedDuration = calculation.estimatedDuration;
+    if (
+      estimatedDuration === undefined && calculation.distance !== undefined && !isNaN(Number(calculation.distance))
+    ) {
+      estimatedDuration = Math.ceil(Number(calculation.distance) * 2.5);
+    }
+    let estimatedArrival = null;
+    if (
+      estimatedDuration !== undefined &&
+      !isNaN(Number(estimatedDuration)) &&
+      Number(estimatedDuration) > 0
+    ) {
+      estimatedArrival = new Date(Date.now() + (Number(estimatedDuration) * 60000)).toISOString();
+    }
     return {
       ...calculation,
+      estimatedDuration,
       features: getPremiumFeatures(calculation.rideType),
       surgeInfo: {
         isActive: surgeMultiplier > 1.0,
         multiplier: surgeMultiplier,
         reason: getSurgeReason(),
       },
-      estimatedArrival: new Date(Date.now() + (calculation.estimatedDuration * 60000)).toISOString(),
+      estimatedArrival,
       carbonOffset: calculateCarbonOffset(parseFloat(calculation.distance)),
       rewardPoints: Math.floor(parseFloat(calculation.totalFare) * 0.1),
     };
@@ -414,47 +465,80 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/rides/calculate-price', async (req, res) => {
     try {
       const { pickupLocation, dropoffLocation, rideType = 'standard' } = req.query;
-      
+
       if (!pickupLocation || !dropoffLocation) {
         return res.status(400).json({ message: 'Pickup and dropoff locations are required' });
       }
-      
+      if (typeof pickupLocation !== 'string' || typeof dropoffLocation !== 'string') {
+        return res.status(400).json({ message: 'Pickup and dropoff locations must be strings' });
+      }
+      if (typeof rideType !== 'string') {
+        return res.status(400).json({ message: 'rideType must be a string' });
+      }
+
       // Check cached calculation (valid for 5 minutes)
-      const existingCalculation = await storage.getPriceCalculation(
-        pickupLocation as string,
-        dropoffLocation as string
-      );
-      
+      let existingCalculation;
+      try {
+        existingCalculation = await storage.getPriceCalculation(pickupLocation, dropoffLocation);
+      } catch (err) {
+        console.error('Error in getPriceCalculation:', err);
+        return res.status(500).json({ message: 'Error fetching cached calculation', error: String(err) });
+      }
+
       if (existingCalculation && isCalculationValid(existingCalculation.createdAt)) {
         return res.json(enhanceCalculationResponse(existingCalculation));
       }
-      
+
       // Calculate premium pricing
-      const distance = Math.random() * 20 + 2; // Random distance between 2-22 km
-      const baseFare = 50; // Premium base fare
-      const perKmRate = getPremiumRateByType(rideType as string);
-      const surgeMultiplier = calculateSurgeMultiplier();
-      const fare = (baseFare + (distance * perKmRate)) * surgeMultiplier;
-      
+      let distance, baseFare, perKmRate, surgeMultiplier, fare;
+      try {
+        distance = Math.random() * 20 + 2; // Random distance between 2-22 km
+        baseFare = 50; // Premium base fare
+        perKmRate = getPremiumRateByType(rideType);
+        surgeMultiplier = calculateSurgeMultiplier();
+        fare = (baseFare + (distance * perKmRate)) * surgeMultiplier;
+      } catch (err) {
+        console.error('Error in fare calculation:', err);
+        return res.status(500).json({ message: 'Error calculating fare', error: String(err) });
+      }
+
       // Calculate additional premium features
-      const estimatedDuration = Math.ceil(distance * 2.5);
-      const rewardPoints = Math.floor(fare * 0.1);
-      const carbonOffset = calculateCarbonOffset(distance);
-      const features = getPremiumFeatures(rideType as string);
-      
-      const calculation = await storage.createPriceCalculation({
-        pickupLocation: pickupLocation as string,
-        dropoffLocation: dropoffLocation as string,
-        distance: distance.toFixed(2),
-        baseFare: baseFare.toFixed(2),
-        perKmRate: perKmRate.toFixed(2),
-        totalFare: fare.toFixed(2),
-        rideType: rideType as string,
-      });
-      
-      res.json(enhanceCalculationResponse(calculation));
+      let estimatedDuration, rewardPoints, carbonOffset, features;
+      try {
+        estimatedDuration = Math.ceil(distance * 2.5);
+        rewardPoints = Math.floor(fare * 0.1);
+        carbonOffset = calculateCarbonOffset(distance);
+        features = getPremiumFeatures(rideType);
+      } catch (err) {
+        console.error('Error in premium features calculation:', err);
+        return res.status(500).json({ message: 'Error calculating premium features', error: String(err) });
+      }
+
+      let calculation;
+      try {
+        calculation = await storage.createPriceCalculation({
+          pickupLocation,
+          dropoffLocation,
+          distance: distance.toFixed(2),
+          baseFare: baseFare.toFixed(2),
+          perKmRate: perKmRate.toFixed(2),
+          totalFare: fare.toFixed(2),
+          rideType,
+        });
+      } catch (err) {
+        console.error('Error in createPriceCalculation:', err);
+        return res.status(500).json({ message: 'Error saving calculation', error: String(err) });
+      }
+
+      try {
+        res.json(enhanceCalculationResponse(calculation));
+      } catch (err) {
+        console.error('Error in enhanceCalculationResponse:', err);
+        res.status(500).json({ message: 'Error enhancing calculation response', error: String(err) });
+      }
     } catch (error) {
-      res.status(500).json({ message: 'Internal server error' });
+      console.error('Unexpected error in /api/rides/calculate-price:', error);
+      res.status(500).json({ message: 'Internal server error', error: String(error) });
     }
   });
   
@@ -604,6 +688,85 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json({ message: 'Thank you for your premium feedback', feedback });
     } catch (error) {
       res.status(500).json({ message: 'Failed to process feedback' });
+    }
+  });
+
+  // Request a new ride
+  app.post('/api/rides', async (req, res) => {
+    try {
+      const { riderId, pickupLocation, dropoffLocation, rideType = 'standard' } = req.body;
+      if (!riderId || !pickupLocation || !dropoffLocation) {
+        return res.status(400).json({ message: 'riderId, pickupLocation, and dropoffLocation are required' });
+      }
+      const distance = Math.random() * 20 + 2;
+      const baseFare = 50;
+      const perKmRate = getPremiumRateByType(rideType);
+      const surgeMultiplier = calculateSurgeMultiplier();
+      const fare = (baseFare + (distance * perKmRate)) * surgeMultiplier;
+      const estimatedDuration = Math.ceil(distance * 2.5);
+      const ride = await storage.createRide({
+        riderId,
+        pickupLocation,
+        dropoffLocation,
+        rideType,
+        fare: fare.toFixed(2),
+        distance: distance.toFixed(2),
+        estimatedDuration,
+        status: 'pending',
+      });
+      res.status(201).json(ride);
+    } catch (error) {
+      res.status(500).json({ message: 'Internal server error', error: String(error) });
+    }
+  });
+
+  // Assign a driver to a ride
+  app.post('/api/rides/:id/assign', async (req, res) => {
+    try {
+      const rideId = parseInt(req.params.id);
+      const { driverId } = req.body;
+      if (!driverId) {
+        return res.status(400).json({ message: 'driverId is required' });
+      }
+      const ride = await storage.updateRide(rideId, { driverId, status: 'accepted' });
+      if (!ride) {
+        return res.status(404).json({ message: 'Ride not found' });
+      }
+      res.json(ride);
+    } catch (error) {
+      res.status(500).json({ message: 'Internal server error', error: String(error) });
+    }
+  });
+
+  // Update ride status
+  app.patch('/api/rides/:id/status', async (req, res) => {
+    try {
+      const rideId = parseInt(req.params.id);
+      const { status } = req.body;
+      if (!status) {
+        return res.status(400).json({ message: 'status is required' });
+      }
+      const ride = await storage.updateRide(rideId, { status });
+      if (!ride) {
+        return res.status(404).json({ message: 'Ride not found' });
+      }
+      res.json(ride);
+    } catch (error) {
+      res.status(500).json({ message: 'Internal server error', error: String(error) });
+    }
+  });
+
+  // Get driver location
+  app.get('/api/drivers/:id/location', async (req, res) => {
+    try {
+      const driverId = parseInt(req.params.id);
+      const driver = await storage.getDriver(driverId);
+      if (!driver) {
+        return res.status(404).json({ message: 'Driver not found' });
+      }
+      res.json({ location: driver.currentLocation });
+    } catch (error) {
+      res.status(500).json({ message: 'Internal server error', error: String(error) });
     }
   });
 

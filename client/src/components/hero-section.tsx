@@ -216,12 +216,6 @@ export default function HeroSection() {
           <div className="animate-slide-up">
             <div className="relative">
               <div className="absolute inset-0 gradient-primary rounded-3xl opacity-20 blur-3xl transform rotate-6"></div>
-              <img
-                src="https://images.unsplash.com/photo-1551474082-96b037e3ca5f?ixlib=rb-4.0.3&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=800&h=600"
-                alt="Modern premium transportation interface"
-                className="relative w-full h-auto rounded-3xl shadow-2xl hover-lift"
-                loading="lazy"
-              />
               
               {/* Floating Elements */}
               <div className="absolute top-6 right-6 glass-morphism rounded-2xl p-4 animate-float">
